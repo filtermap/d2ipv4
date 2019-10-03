@@ -78,7 +78,8 @@ function main() {
         lastIPLongOnThisLot - firstIPLongOnThisLot + 1;
       console.error(
         `not found in ${firstIPOnThisLot}-${lastIPOnThisLot} ${numberOfSearchedIPAddresses} addresses (${(
-          numberOfSearchedIPAddresses / numberOfIPAddresses
+          (numberOfSearchedIPAddresses * 100) /
+          numberOfIPAddresses
         ).toFixed(2)}%)`
       );
       continue;
