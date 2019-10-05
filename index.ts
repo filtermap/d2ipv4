@@ -1,8 +1,11 @@
 import fs from "fs";
 import readline from "readline";
+import os from "os";
+import { Worker, WorkerOptions } from "worker_threads";
 import commandLineArgs from "command-line-args";
 import commandLineUsage from "command-line-usage";
 import downloadFile from "download-file";
+import ipFunctions from "ipfunctions";
 import * as ipUtil from "./ipUtil";
 import match from "./match";
 
@@ -16,7 +19,7 @@ async function main() {
   if (!options.id) throw new Error("!options.id");
   const { name, id } = options;
   const ip = options.all
-    ? searchAllIPV4Addresses(name, id)
+    ? await searchAllIPV4Addresses(name, id)
     : await searchJapaneseIPV4Addresses(name, id, !!options.update);
   if (!ip) {
     console.error(`not found: ${nameAndIDToString(name, id)}`);
@@ -75,9 +78,66 @@ function nameAndIDToString(name: string, id: string): string {
   return `${name} (ID: ${id})`;
 }
 
-function searchAllIPV4Addresses(name: string, id: string): string | undefined {
+async function searchAllIPV4Addresses(
+  name: string,
+  id: string
+): Promise<string | undefined> {
   console.error(`search all IPv4 addresses for ${nameAndIDToString(name, id)}`);
-  return ipUtil.find("0.0.0.0", "255.255.255.255", ip => match(name, id, ip));
+  const numberOfWorkers = os.cpus().length;
+  const firstIP = "0.0.0.0";
+  const lastIP = "255.255.255.255";
+  const firstIPLong = ipFunctions.ip2long(firstIP);
+  const lastIPLong = ipFunctions.ip2long(lastIP);
+  const numberOfIPsForOneWorker = Math.floor(
+    (lastIPLong - firstIPLong) / numberOfWorkers
+  );
+  const promises: Promise<string>[] = [];
+  for (let n = 0; n < numberOfWorkers; n++) {
+    const firstIPLongForWorker = firstIPLong + numberOfIPsForOneWorker * n;
+    const lastIPLongForWorker =
+      n === numberOfWorkers - 1
+        ? lastIPLong
+        : firstIPLongForWorker + numberOfIPsForOneWorker - 1;
+    const firstIPForWorker = ipFunctions.long2ip(firstIPLongForWorker);
+    const lastIPForWorker = ipFunctions.long2ip(lastIPLongForWorker);
+    promises.push(
+      new Promise((resolve, reject) => {
+        const worker = tsWorker("./worker.ts", {
+          workerData: {
+            name,
+            id,
+            firstIP: firstIPForWorker,
+            lastIP: lastIPForWorker
+          }
+        });
+        worker.on("message", resolve);
+        worker.on("error", reject);
+        worker.on("exit", code => {
+          if (code !== 0)
+            reject(new Error(`Worker stopped with exit code ${code}`));
+        });
+      })
+    );
+  }
+  return Promise.race(promises);
+}
+
+// https://github.com/TypeStrong/ts-node/issues/676#issuecomment-531620154
+function tsWorker(file: string, options: WorkerOptions) {
+  options.eval = true;
+  if (!options.workerData) {
+    options.workerData = {};
+  }
+  options.workerData.__filename = file;
+  return new Worker(
+    `const w = require('worker_threads');
+require('ts-node').register({ files: true });
+const file = w.workerData.__filename;
+delete w.workerData.__filename;
+require(file);
+`,
+    options
+  );
 }
 
 async function searchJapaneseIPV4Addresses(
